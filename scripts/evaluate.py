@@ -322,38 +322,41 @@ def plot_adaptation_curve(
     axes[1].grid(True)
     
     plt.tight_layout()
-    plt.savefig(save_path)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
-    
+
+
 def main():
     parser = argparse.ArgumentParser(description='Evaluate MetaMARL vs CoLight')
     parser.add_argument('--task_config', type=str, required=True,
-                        help='Path to the test task configuration file (flow file)')
-    parser.add_argument('--metalight_config', type=str, default='configs/metalight_config.json',
-                        help='Path to MetaMARL configuration file')
-    parser.add_argument('--colight_config', type=str, default='configs/colight_config.json',
-                        help='Path to CoLight configuration file')
+                        help='Path to test task flow file')
+    parser.add_argument('--metalight_config', type=str, 
+                        default='configs/metalight_config.json',
+                        help='Path to MetaMARL config')
+    parser.add_argument('--colight_config', type=str, 
+                        default='configs/colight_config.json',
+                        help='Path to CoLight config')
     parser.add_argument('--metalight_model', type=str, required=True,
-                        help='Path to saved MetaMARL meta-model')
+                        help='Path to MetaMARL model')
     parser.add_argument('--colight_model_dir', type=str, required=True,
-                        help='Directory of saved CoLight models')
-    parser.add_argument('--num_adapt_steps', type=int, default=10,
-                        help='Number of adaptation steps for MetaMARL')
+                        help='Directory with CoLight models')
+    parser.add_argument('--num_adapt_steps', type=int, default=20,
+                        help='Adaptation episodes')
     parser.add_argument('--output_dir', type=str, default='results/plots',
-                        help='Directory to save evaluation plots')
+                        help='Output directory')
     args = parser.parse_args()
 
-    # Setup logging
+    # Setup
     log_dir = 'results/logs'
     logger = setup_logging(log_dir)
 
-    # Load configurations
+    # Load configs
     with open(args.metalight_config, 'r') as f:
         metalight_config = json.load(f)
     with open(args.colight_config, 'r') as f:
         colight_config = json.load(f)
 
-    # Create CityFlow environment for the test task
+    # Create environment
     task_name = Path(args.task_config).stem
     roadnet_path = str(Path(args.task_config).parent / 'roadnet.json')
     cityflow_config_path = f'/tmp/eval_{task_name}.json'
@@ -363,26 +366,58 @@ def main():
     obs_dim = env.get_observation_space(env.intersections[0])
     action_dim = env.get_action_space(env.intersections[0])
     
-    # --- Evaluate MetaMARL ---
-    logger.info("--- Evaluating MetaMARL ---")
+    # Evaluate MetaMARL
+    logger.info("=== Evaluating MetaMARL ===")
     meta_model = FRAPPlusPlus(obs_dim, action_dim, hidden_dim=metalight_config['hidden_dim'])
-    maml = MAML(model=meta_model, inner_lr=metalight_config['inner_lr'], meta_lr=metalight_config['meta_lr'])
+    maml = MAML(
+        model=meta_model, 
+        inner_lr=metalight_config['inner_lr'], 
+        meta_lr=metalight_config['meta_lr']
+    )
     maml.load_model(args.metalight_model)
     
-    metalight_history, _ = adapt_metalight(env, meta_model, maml, args.num_adapt_steps, metalight_config, logger)
+    metalight_history, _ = adapt_metalight(
+        env, meta_model, maml, 
+        args.num_adapt_steps, 
+        metalight_config, 
+        logger
+    )
 
-    # --- Evaluate CoLight ---
-    logger.info("\n--- Evaluating CoLight ---")
-    # A simple neighbor map for evaluation (replace with actual logic if available)
-    neighbor_map = {inter_id: [n for n in env.intersections if n != inter_id][:4] for inter_id in env.intersections}
-    colight_metrics = evaluate_colight(env, args.colight_model_dir, neighbor_map, colight_config, logger)
+    # Evaluate CoLight
+    logger.info("\n=== Evaluating CoLight ===")
+    neighbor_map = {
+        inter_id: [n for n in env.intersections if n != inter_id][:4] 
+        for inter_id in env.intersections
+    }
+    colight_metrics = evaluate_colight(
+        env, 
+        args.colight_model_dir, 
+        neighbor_map, 
+        colight_config, 
+        logger
+    )
 
-    # --- Plotting Results ---
+    # Plot results
     os.makedirs(args.output_dir, exist_ok=True)
-    plot_path = os.path.join(args.output_dir, f'adaptation_comparison_{task_name}.png')
+    plot_path = os.path.join(args.output_dir, f'adaptation_{task_name}.png')
     plot_adaptation_curve(metalight_history, colight_metrics, plot_path, task_name)
     
-    logger.info(f"\nEvaluation complete. Plot saved to {plot_path}")
+    # Save metrics
+    results = {
+        'task': task_name,
+        'metalight_final': metalight_history[-1] if metalight_history else {},
+        'colight': colight_metrics,
+        'adaptation_history': metalight_history
+    }
+    
+    results_path = os.path.join(args.output_dir, f'results_{task_name}.json')
+    with open(results_path, 'w') as f:
+        json.dump(results, f, indent=4)
+    
+    logger.info(f"\n=== Evaluation Complete ===")
+    logger.info(f"Plot saved: {plot_path}")
+    logger.info(f"Results saved: {results_path}")
+
 
 if __name__ == '__main__':
     main()
